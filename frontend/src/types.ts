@@ -7,9 +7,16 @@ export interface Plan {
     expected_output: string;
 }
 
+export interface LogEntry {
+    timestamp: string;
+    agent: string;
+    message: string;
+    type: 'info' | 'thought' | 'error' | 'success';
+}
+
 export interface RunState {
     approved: boolean;
-    logs: string[];
+    logs: LogEntry[];
     done: boolean;
     report: string | null;
     focus: string | null;

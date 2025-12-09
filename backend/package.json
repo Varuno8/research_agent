@@ -13,6 +13,8 @@
   "type": "commonjs",
   "description": "",
   "dependencies": {
+    "@langchain/core": "^1.1.4",
+    "@langchain/langgraph": "^1.0.4",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

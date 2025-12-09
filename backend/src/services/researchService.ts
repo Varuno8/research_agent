@@ -4,6 +4,7 @@ import { NewsAgent } from '../agents/NewsAgent';
 import { TechnicalAgent } from '../agents/TechnicalAgent';
 import { FundamentalAgent } from '../agents/FundamentalAgent';
 import { SynthesizerAgent } from '../agents/SynthesizerAgent';
+import { researchGraph } from '../agents/ResearchGraph';
 
 // In-memory DB
 const DB: Record<string, DBEntry> = {};
@@ -63,43 +64,54 @@ export const researchService = {
         state.done = false;
         const sector = plan.sectors[0];
 
-        // 1) News Agent
-        state.logs.push("📰 News Agent: Scanning market headlines…");
-        const newsResult = await newsAgent.analyze(sector);
-        state.logs.push(`✅ News Agent: Found ${newsResult.sources.length} relevant articles.`);
-
-        // 2) Define Tickers
         const tickers = sector === "IT"
             ? ["TCS.NS", "INFY.NS", "WIPRO.NS"]
             : ["SUNPHARMA.NS", "CIPLA.NS", "BIOCON.NS"];
 
-        // 3) Technical & Fundamental Agents (Parallel)
-        state.logs.push("📈 Technical Agent: Analyzing price action…");
-        state.logs.push("💰 Fundamental Agent: Checking valuations…");
+        // Initial State
+        const initialState = {
+            sector,
+            tickers,
+            news: null,
+            technicals: [],
+            fundamentals: [],
+            report: null,
+            logs: [],
+            critique_count: 0
+        };
 
-        const technicalPromises = tickers.map(t => technicalAgent.analyze(t));
-        const fundamentalPromises = tickers.map(t => fundamentalAgent.analyze(t));
+        try {
+            // Run the Graph
+            const finalState = await researchGraph.invoke(initialState);
 
-        const [technicals, fundamentals] = await Promise.all([
-            Promise.all(technicalPromises),
-            Promise.all(fundamentalPromises)
-        ]);
+            // Sync State back to DB
+            // We append new logs to existing ones (if any)
+            // Note: In a real streaming setup, we'd stream events from the graph.
+            // For now, we just dump the final logs.
 
-        state.logs.push("✅ Analysts: Data collection complete.");
+            // Map graph logs to our LogEntry format if needed, or just push them
+            // Our graph logs match the format roughly, let's ensure type safety
+            state.logs = (finalState as any).logs;
+            state.report = (finalState as any).report;
 
-        // 4) Synthesizer Agent
-        state.logs.push("✍️ Synthesizer Agent: Compiling final report…");
-        const report = synthesizerAgent.compose(sector, newsResult, technicals, fundamentals);
+            // Prepare charts
+            if ((finalState as any).technicals) {
+                state.charts = (finalState as any).technicals
+                    .filter((t: any) => t.history && t.history.length > 0)
+                    .map((t: any) => ({ ticker: t.ticker, data: t.history }));
+            }
 
-        state.report = report;
-
-        // Prepare charts for frontend
-        state.charts = technicals
-            .filter(t => t.history.length > 0)
-            .map(t => ({ ticker: t.ticker, data: t.history }));
-
-        state.logs.push("✅ Research complete");
-        state.done = true;
+            state.done = true;
+        } catch (error: any) {
+            console.error("Graph execution failed", error);
+            state.logs.push({
+                timestamp: new Date().toLocaleTimeString(),
+                agent: "System",
+                message: `Critical Error: ${error.message}`,
+                type: "error"
+            });
+            state.done = true; // Stop spinning
+        }
     },
 
     getLogs: (planId: string) => {
