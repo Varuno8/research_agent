@@ -13,6 +13,7 @@ export interface RunState {
     done: boolean;
     report: string | null;
     focus: string | null;
+    charts?: { ticker: string; data: { date: string; price: number }[] }[];
 }
 
 export interface DBEntry {

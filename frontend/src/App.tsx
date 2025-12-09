@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
-import { Play, CheckCircle, FileText, RefreshCw, Terminal, Layout, Activity, Sun, Moon, Search, BarChart3 } from 'lucide-react';
+import { Play, CheckCircle, FileText, RefreshCw, Terminal, Layout, Activity, Sun, Moon, Search, BarChart3, Download } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import type { Plan } from './types';
+import StockChart from './StockChart';
 import './index.css';
 
 const API_URL = 'http://localhost:3001/api';
@@ -13,11 +16,14 @@ function App() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [report, setReport] = useState<string | null>(null);
+  const [charts, setCharts] = useState<{ ticker: string; data: any[] }[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [isApproved, setIsApproved] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+
+  const reportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -40,6 +46,7 @@ function App() {
       setIsApproved(false);
       setLogs([]);
       setReport(null);
+      setCharts([]);
       showToast(`Plan created: ${res.data.plan_id}`);
     } catch (err) {
       console.error(err);
@@ -88,6 +95,9 @@ function App() {
           if (res.data.done) {
             setIsRunning(false);
             showToast("Research completed");
+            if (res.data.charts) {
+              setCharts(res.data.charts);
+            }
             fetchReport();
           }
         } catch (err) {
@@ -110,10 +120,29 @@ function App() {
     }
   };
 
+  const exportPDF = async () => {
+    if (!reportRef.current) return;
+    try {
+      const canvas = await html2canvas(reportRef.current, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`research-report-${plan?.plan_id}.pdf`);
+      showToast("PDF Exported");
+    } catch (err) {
+      console.error("PDF export failed", err);
+      showToast("Failed to export PDF");
+    }
+  };
+
   const reset = () => {
     setPlan(null);
     setLogs([]);
     setReport(null);
+    setCharts([]);
     setIsApproved(false);
     setIsRunning(false);
     setQuery("Analyze Indian IT services sector outlook for 2026: demand, GenAI impact, risks");
@@ -224,29 +253,52 @@ function App() {
           </div>
         </div>
 
-        <div className="card">
-          <div className="card-header">
-            <div className="card-icon"><BarChart3 size={20} /></div>
-            <h2>Intelligence Report</h2>
+        <div className="card" style={{ overflow: 'visible' }}>
+          <div className="card-header" style={{ justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div className="card-icon"><BarChart3 size={20} /></div>
+              <h2>Intelligence Report</h2>
+            </div>
+            {report && (
+              <button className="btn btn-secondary" onClick={exportPDF} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+                <Download size={16} /> Export PDF
+              </button>
+            )}
           </div>
-          {report ? (
-            <div className="markdown-body">
-              <ReactMarkdown>{report}</ReactMarkdown>
-            </div>
-          ) : (
-            <div style={{
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-secondary)',
-              opacity: 0.6
-            }}>
-              <FileText size={64} style={{ marginBottom: '1rem', opacity: 0.2 }} />
-              <p>Report will appear here after research is complete.</p>
-            </div>
-          )}
+
+          <div ref={reportRef} style={{ background: 'var(--card-bg)', padding: '1rem', borderRadius: '12px' }}>
+            {report ? (
+              <>
+                <div className="markdown-body">
+                  <ReactMarkdown>{report}</ReactMarkdown>
+                </div>
+
+                {charts.length > 0 && (
+                  <div style={{ marginTop: '3rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
+                    <h3 style={{ marginBottom: '2rem', color: 'var(--text-primary)' }}>Market Performance (1 Year)</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
+                      {charts.map((chart) => (
+                        <StockChart key={chart.ticker} ticker={chart.ticker} data={chart.data} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{
+                height: '300px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-secondary)',
+                opacity: 0.6
+              }}>
+                <FileText size={64} style={{ marginBottom: '1rem', opacity: 0.2 }} />
+                <p>Report will appear here after research is complete.</p>
+              </div>
+            )}
+          </div>
         </div>
       </main>
 

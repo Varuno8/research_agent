@@ -1,71 +1,18 @@
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
-import yahooFinance from 'yahoo-finance2';
 import { Plan, RunState, DBEntry } from '../types';
-
-const TAVILY_KEY = process.env.TAVILY_API_KEY;
+import { NewsAgent } from '../agents/NewsAgent';
+import { TechnicalAgent } from '../agents/TechnicalAgent';
+import { FundamentalAgent } from '../agents/FundamentalAgent';
+import { SynthesizerAgent } from '../agents/SynthesizerAgent';
 
 // In-memory DB
 const DB: Record<string, DBEntry> = {};
 
-async function searchWeb(query: string, maxResults: number = 5): Promise<{ title: string; url: string }[]> {
-    if (!TAVILY_KEY) {
-        return [
-            { title: "(mock) Industry brief", url: "https://example.com/brief" },
-            { title: "(mock) Company earnings", url: "https://example.com/earnings" },
-        ];
-    }
-    try {
-        const response = await axios.post("https://api.tavily.com/search", {
-            api_key: TAVILY_KEY,
-            query: query,
-            max_results: maxResults
-        });
-        const results = response.data.results || [];
-        return results.map((res: any) => ({
-            title: res.title || "result",
-            url: res.url
-        }));
-    } catch (error) {
-        console.error("Tavily search failed", error);
-        return [{ title: "No results", url: "" }];
-    }
-}
-
-async function getKpis(ticker: string): Promise<{ last_price: number | null; market_cap: number | null; price_5y_cagr: number | null }> {
-    try {
-        const quote = await yahooFinance.quote(ticker) as any;
-        const last_price = quote.regularMarketPrice || null;
-        const market_cap = quote.marketCap || null;
-
-        let cagr: number | null = null;
-        try {
-            const endDate = new Date();
-            const startDate = new Date();
-            startDate.setFullYear(startDate.getFullYear() - 5);
-
-            const history = await yahooFinance.historical(ticker, {
-                period1: startDate,
-                period2: endDate,
-                interval: '1d'
-            }) as any[];
-
-            if (history.length > 0) {
-                const startPrice = history[0].close;
-                const endPrice = history[history.length - 1].close;
-                const years = 5; // Approx
-                cagr = Math.pow(endPrice / startPrice, 1 / years) - 1;
-            }
-        } catch (e) {
-            console.error(`Failed to get history for ${ticker}`, e);
-        }
-
-        return { last_price, market_cap, price_5y_cagr: cagr };
-    } catch (error) {
-        console.error(`Failed to get KPIs for ${ticker}`, error);
-        return { last_price: null, market_cap: null, price_5y_cagr: null };
-    }
-}
+// Initialize Agents
+const newsAgent = new NewsAgent();
+const technicalAgent = new TechnicalAgent();
+const fundamentalAgent = new FundamentalAgent();
+const synthesizerAgent = new SynthesizerAgent();
 
 function classify(query: string, sectorChoice: string): string[] {
     const q = query.toLowerCase();
@@ -114,56 +61,51 @@ export const researchService = {
 
         state.logs = [];
         state.done = false;
+        const sector = plan.sectors[0];
 
-        // 1) Search
-        state.logs.push("🔎 Searching latest sector outlook…");
-        const results = await searchWeb(`${plan.sectors[0]} sector India outlook 2025 2026`, 5);
+        // 1) News Agent
+        state.logs.push("📰 News Agent: Scanning market headlines…");
+        const newsResult = await newsAgent.analyze(sector);
+        state.logs.push(`✅ News Agent: Found ${newsResult.sources.length} relevant articles.`);
 
-        // 2) Show sources
-        state.logs.push("📄 Reading sources…");
-        for (const r of results) {
-            state.logs.push(`Source: ${r.title} | ${r.url}`);
-        }
-
-        // 3) Pull KPIs
-        state.logs.push("📊 Pulling tickers KPIs…");
-        const tickers = plan.sectors.includes("IT")
+        // 2) Define Tickers
+        const tickers = sector === "IT"
             ? ["TCS.NS", "INFY.NS", "WIPRO.NS"]
             : ["SUNPHARMA.NS", "CIPLA.NS", "BIOCON.NS"];
 
-        const rows: any[] = [];
-        for (const t of tickers) {
-            const k = await getKpis(t);
-            rows.push({ ticker: t, ...k });
-        }
+        // 3) Technical & Fundamental Agents (Parallel)
+        state.logs.push("📈 Technical Agent: Analyzing price action…");
+        state.logs.push("💰 Fundamental Agent: Checking valuations…");
 
-        // 4) Compose report
-        let table = "| Company | Last Price | Market Cap | 5y Price CAGR |\n|---|---:|---:|---:|\n";
-        for (const row of rows) {
-            const cStr = row.price_5y_cagr !== null ? `${(row.price_5y_cagr * 100).toFixed(2)}%` : "N/A";
-            table += `| ${row.ticker} | ${row.last_price || "N/A"} | ${row.market_cap || "N/A"} | ${cStr} |\n`;
-        }
+        const technicalPromises = tickers.map(t => technicalAgent.analyze(t));
+        const fundamentalPromises = tickers.map(t => fundamentalAgent.analyze(t));
 
-        const sourcesMd = results.map(r => `- ${r.title} — ${r.url}`).join("\n");
+        const [technicals, fundamentals] = await Promise.all([
+            Promise.all(technicalPromises),
+            Promise.all(fundamentalPromises)
+        ]);
 
-        state.report = `# ${plan.sectors[0]} Sector — Quick Research Note
+        state.logs.push("✅ Analysts: Data collection complete.");
 
-## Executive Summary
-Auto-generated note based on real-time search and market KPIs. Replace with your sector template later.
+        // 4) Synthesizer Agent
+        state.logs.push("✍️ Synthesizer Agent: Compiling final report…");
+        const report = synthesizerAgent.compose(sector, newsResult, technicals, fundamentals);
 
-## Benchmarks (yfinance)
-${table}
+        state.report = report;
 
-## Sources
-${sourcesMd}
-`;
+        // Prepare charts for frontend
+        state.charts = technicals
+            .filter(t => t.history.length > 0)
+            .map(t => ({ ticker: t.ticker, data: t.history }));
+
         state.logs.push("✅ Research complete");
         state.done = true;
     },
 
     getLogs: (planId: string) => {
         if (!DB[planId]) throw new Error("plan_id not found");
-        return { logs: DB[planId].state.logs, done: DB[planId].state.done };
+        const s = DB[planId].state;
+        return { logs: s.logs, done: s.done, charts: s.done ? s.charts : undefined };
     },
 
     getReport: (planId: string) => {
